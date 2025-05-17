@@ -1,0 +1,128 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <ctype.h>
+
+#define MAX_INPUT 100
+#define MAX_ARGS 50
+
+int nanoshell_main(int argc, char *argv[]) {
+    char line[MAX_INPUT];
+
+    while (1) {
+        printf("PicoShell > ");
+        
+        // Read user input
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            printf("Good Bye :)\n");
+            break;
+        }
+
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') {
+            line[len - 1] = '\0';
+        }
+
+        if (strlen(line) == 0) {
+            continue;
+        }
+
+        // Tokenize the input
+        char *args[MAX_ARGS];
+        int count = 0;
+        char *token = strtok(line, " ");
+        
+        while (token && count < MAX_ARGS - 1) {
+            args[count++] = strdup(token);  // Duplicate and store the token
+            token = strtok(NULL, " ");
+        }
+        args[count] = NULL;
+
+        // Separate environment variables and command arguments
+        char *exec_args[MAX_ARGS];
+        int exec_count = 0;
+
+        // Check and assign environment variables
+        for (int i = 0; i < count; ++i) {
+            const char *eq = strchr(args[i], '=');
+            if (eq && eq != args[i]) {
+                // If it's an environment variable assignment
+                int is_valid = 1;
+                
+                // Check if the part before '=' is a valid variable name
+                for (const char *p = args[i]; p < eq; ++p) {
+                    if (!(isalnum(*p) || *p == '_')) {
+                        is_valid = 0;  // Invalid character in the variable name
+                        break;
+                    }
+                }
+
+                if (is_valid) {
+                    if (putenv(strdup(args[i])) != 0) {
+                        perror("putenv failed");
+                    }
+                } else {
+                    fprintf(stderr, "Invalid environment variable: %s\n", args[i]);
+                }
+            } else {
+                // Otherwise, treat it as a regular command argument
+                exec_args[exec_count++] = args[i];
+            }
+        }
+        exec_args[exec_count] = NULL;  // Null-terminate the exec_args array
+
+        // Handle built-in commands
+        if (strcmp(exec_args[0], "exit") == 0) {
+            printf("Good Bye :)\n");
+            // Free allocated memory before exiting
+            for (int i = 0; i < count; ++i) free(args[i]);
+            break;
+
+        } else if (strcmp(exec_args[0], "echo") == 0) {
+            for (int i = 1; i < exec_count; i++) {
+                printf("%s ", exec_args[i]);
+            }
+            printf("\n");
+
+        } else if (strcmp(exec_args[0], "pwd") == 0) {
+            char cwd[1024];
+            if (getcwd(cwd, sizeof(cwd)) != NULL) {
+                printf("%s\n", cwd);
+            } else {
+                perror("pwd failed");
+            }
+
+        } else if (strcmp(exec_args[0], "cd") == 0) {
+            if (exec_count < 2) {
+                fprintf(stderr, "cd: missing operand\n");
+            } else {
+                if (chdir(exec_args[1]) != 0) {
+                    perror("cd failed");
+                }
+            }
+
+        } else {
+            // External command handling
+            pid_t pid = fork();
+            if (pid == 0) {
+                execvp(exec_args[0], exec_args);
+                perror("exec failed");
+                exit(EXIT_FAILURE);
+            } else if (pid > 0) {
+                int status;
+                waitpid(pid, &status, 0);
+            } else {
+                perror("fork failed");
+            }
+        }
+
+        // Free allocated memory for arguments
+        for (int i = 0; i < count; i++) {
+            free(args[i]);
+        }
+    }
+
+    return 0; // Return success status
+}
